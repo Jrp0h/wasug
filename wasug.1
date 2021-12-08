@@ -1,0 +1,34 @@
+.TH WASUG 1 2021-12-08 GNU
+
+.SH NAME
+wasug - Webapp SystemD Unit Generator
+
+.SH SYNOPSIS
+.B wasug
+[\fBoptions\fR]
+
+.SH DESCRIPTION
+.B wasug
+A simple wizard for creating a SystemD unit file for a Webapp.
+
+.SH OPTIONS
+.TP
+.BR \-h ", " \-? ", " \-\-help
+Displays help information.
+.TP
+.BR \-v ", " \-\-version
+Prints version information.
+.TP
+\fB\-s\fR, \fB\-\-sudo\fR \fIprogram\fR
+Specify which program to use when root privileges are required.
+
+.SH DEPENDENCIES
+.B dialog
+For displaying the wizard.
+
+.SH AUTHOR
+Marcus Nilsson 
+.I <marcus.nilsson@genarp.com>
+
+.SH SEE ALSO
+\fBdialog\fR(1)

@@ -1,0 +1,317 @@
+#!/usr/bin/bash
+
+# Webapp SystemD Unit Generator (WASUG) 
+# by Marcus Nilsson <marcus.nilsson@genarp.com>
+# Licensed under MIT
+
+### Global Variables
+version="21.12.8"
+backtitle="Webapp SystemD Unit Generator (WASUG)"
+
+sudo_program="sudo"
+
+node_path="$(which node)"
+go_path="$(which go)"
+
+program_root="$(pwd)"
+program_name="$(basename $program_root)"
+program_description=""
+program_env_path="$program_root/.env"
+program_entrypoint="server.js"
+program_runner="$node_path"
+
+service_user="$(who | awk '{ print $1; }')"
+service_group="$service_user"
+
+### Helper functions
+cancelscript() {
+    clear
+    exit 1
+}
+
+errorout() {
+	clear;
+	echo "ERROR:" >&2
+	echo "$1" >&2
+	echo "" >&2
+	echo "ABORTING" >&2
+	exit 1
+}
+
+print_help() {
+    echo "Usage: $0 <options>"
+
+    echo "Options:"
+    echo "  -h, -?, --help        Displays this message"
+    echo "  -v, --version         Prints version"
+    echo "  -s, --sudo <program>  Specifies program replacement for sudo. ex. doas. Default: sudo"
+}
+
+### Program Functions
+handle_args() {
+    while test $# -gt 0; do
+        case "$1" in
+            --sudo=*|-s=*)
+                sudo_program=`echo $1 | sed -e 's/^[^=]*=//g'`
+            ;;
+            --sudo|-s)
+                shift
+                sudo_program="$1"
+
+                if [ -z "$sudo_program" ]; then
+                    echo "Please specify a sudo replacement"
+                    exit
+                fi
+            ;;
+            --version|-v)
+                echo "Webapp SystemD Unit Generator (WASUG) - $version"
+                exit
+            ;;
+            -h|--help|-?)
+                print_help $@
+                exit
+            ;;
+            *)
+                echo "Unknown option $1"
+                print_help $@
+                exit
+            ;;
+        esac
+
+        shift
+    done
+}
+
+ui_welcome() {
+    dialog --backtitle "$backtitle" --colors --title "Webapp SystemD Unit Generator" --yes-label "Continue" --no-label "Cancel" --yesno "This script will create a SystemD Unit for your webapp. All you have to do is answer a couple of simple questions and the rest will be done for you.\n\nTo avoid as much typing I recommend running this from the root of the project.\n\nThis program will ask you for root privilages with $sudo_program! Do you want to continue?" 13 70 || cancelscript
+}
+
+ui_program_info() {
+
+    program_type=$(dialog --backtitle "$backtitle" --colors --title "Program Info" --menu "Select language:" 15 30 3 1 NodeJS 2 Golang 3 Other 2>&1 >/dev/tty)
+
+    case $program_type in
+        1)
+            program_runner="$node_path"
+            program_entrypoint="server.js"
+        ;;
+        2)
+            program_runner="$go_path"
+            program_entrypoint="main.go"
+        ;;
+        2)
+            program_runner=""
+        ;;
+    esac
+
+    while true; do
+        program_runner=$(dialog --backtitle "$backtitle" --colors --title "Program Info" --inputbox "Full path to Runner:" 5 70 "$program_runner" 2>&1 >/dev/tty)
+
+        if [ -z "$program_runner" ]; then
+            dialog --backtitle "$backtitle" --colors --title "Invalid name" --ok-label "Ok" --msgbox "Runner can not be empty!" 5 70
+            continue
+        fi
+
+        break
+    done
+
+    while true; do
+        program_name=$(dialog --backtitle "$backtitle" --colors --title "Program Info" --inputbox "Name of the Program:" 5 70 "$program_name" 2>&1 >/dev/tty)
+
+        if [ -z "$program_name" ]; then
+            dialog --backtitle "$backtitle" --colors --title "Invalid name" --ok-label "Ok" --msgbox "Name can not be empty!" 5 70
+            continue
+        fi
+
+        # Lowercase, trim and replace whitespace with underscore
+        program_name="${program_name,,}"
+        program_name=`echo "$program_name" | sed 's/ *$//g'`
+        program_name=`echo "$program_name" | sed -r 's/\s+/_/g'`
+        break
+    done
+
+    program_description=$(dialog --backtitle "$backtitle" --colors --title "Program Info" --inputbox "Description of the Program:" 5 70 2>&1 >/dev/tty)
+
+    while true; do
+        program_root=$(dialog --backtitle "$backtitle" --colors --title "Program Info" --inputbox "Path to the Project root:" 5 70 "$program_root" 2>&1 >/dev/tty)
+
+        if [ ! -d "$program_root" ]; then
+            dialog --backtitle "$backtitle" --colors --title "Invalid path" --ok-label "Ok" --msgbox "Path does not exist!" 5 70
+            continue
+        fi
+
+        program_root=`echo "$program_root" | sed 's:/*$::'`
+        program_env_path="$program_root/.env"
+        break
+    done
+
+    while true; do
+        program_entrypoint=$(dialog --backtitle "$backtitle" --colors --title "Program Info" --inputbox "Relative Path to Entrypoint from Project Root:" 5 70 "$program_entrypoint" 2>&1 >/dev/tty)
+
+        if [ ! -f "$program_root/$program_entrypoint" ]; then
+            dialog --backtitle "$backtitle" --colors --title "Invalid path" --ok-label "Ok" --msgbox "Path does not exist!" 5 70
+            continue
+        fi
+
+        break
+    done
+}
+
+ui_service_info() { 
+    while true; do
+        service_user=$(dialog --backtitle "$backtitle" --colors --title "Service Info" --inputbox "Run service as user:" 5 70 "$service_user" 2>&1 >/dev/tty)
+
+        id "$service_user" &>/dev/null
+
+        if [ $? -ne 0 ]; then
+            dialog --backtitle "$backtitle" --colors --title "Invalid user" --ok-label "Ok" --msgbox "That user does not exist!" 5 70
+            continue
+        fi
+
+        break
+    done
+
+    while true; do
+        service_group=$(dialog --backtitle "$backtitle" --colors --title "Service Info" --inputbox "Run service as group:" 5 70 "$service_group" 2>&1 >/dev/tty)
+
+        getent group "$service_group" &>/dev/null
+
+        if [ $? -ne 0 ]; then
+            dialog --backtitle "$backtitle" --colors --title "Invalid group" --ok-label "Ok" --msgbox "That group does not exist!" 5 70
+            continue
+        fi
+
+        break
+    done
+
+    # dialog --backtitle "$backtitle" --colors --title "Service Info" --yes-label "Yes" --no-label "No" --yesno "Do you want to chroot the unit to $program_root?" 7 70
+
+    # if [ $? -eq 0 ]; then
+    #     service_use_chroot="1"
+    # else
+    #     service_use_chroot="0"
+    # fi
+}
+
+ui_env_info() {
+    while true; do
+        program_env_path=$(dialog --backtitle "$backtitle" --colors --title "Environment Variable Info" --inputbox "Path to .env file:" 5 70 "$program_env_path" 2>&1 >/dev/tty)
+
+        if [ ! -f "$program_env_path" ]; then
+            dialog --backtitle "$backtitle" --colors --title "Invalid path" --ok-label "Ok" --msgbox "Path does not exist!" 5 70
+            continue
+        fi
+
+        break
+    done
+}
+
+ui_verify_program_info() {
+    while true; do
+        dialog --backtitle "$backtitle" --colors --title "Verify Info" --yes-label "Yes" --no-label "Edit" --yesno "Name: $program_name\nDescription: $program_description\nRoot Directory: $program_root\nEntrypoint: $program_root/$program_entrypoint\nEnv path: $program_env_path\n\nDoes the information look correct?" 11 100
+
+        if [ $? -ne 0 ]; then
+            ui_program_info
+            continue
+        fi
+
+        break
+    done
+}
+
+ui_verify_service_info() {
+    while true; do
+        dialog --backtitle "$backtitle" --colors --title "Verify Info" --yes-label "Yes" --no-label "Edit" --yesno "User: $service_user\nGroup: $service_group\n\nDoes the information look correct?" 10 100
+
+        if [ $? -ne 0 ]; then
+            ui_service_info
+            continue
+        fi
+
+        break
+    done
+}
+
+ui_final() {
+    final_path="/lib/systemd/system/$program_name.service"    
+
+    dialog --backtitle "$backtitle" --colors --title "Done" --yes-label "Enable and Start" --no-label "Quit" --yesno "Service file has been created and is stored at $final_path\n\nDo you want to enable and start the service now?" 13 70
+
+    if [ $? -eq 0 ]; then
+        $sudo_program systemctl enable --now $program_name >/dev/null
+        clear
+        echo "Service enabled!"
+        $sudo_program systemctl status $program_name
+    fi
+}
+
+generate_service_file() {
+
+    temp_file="/tmp/wasug.$RANDOM.service"
+
+cat <<EOF > $temp_file
+[Unit]
+Description=$program_description
+Requires=network.target
+After=network.target
+
+[Service]
+Type=simple
+PIDFile=/run/$program_name.pid
+User=$service_user
+Group=$service_group
+WorkingDirectory=$program_root
+ExecStart=$program_runner $program_root/$program_entrypoint
+Restart=always
+RestartSec=3
+EOF
+
+    echo "" >> $temp_file
+
+    while read line; do
+        line=`echo $line | sed 's/ *$//g'`
+
+        if [ "$line" = "" ]; then
+            continue
+        fi
+
+        echo "Environment=\"$line\"" >> $temp_file
+    done < $program_env_path
+
+    echo "" >> $temp_file
+    echo "[Install]" >> $temp_file
+    echo "WantedBy=multi-user.target" >> $temp_file
+
+
+    final_path="/lib/systemd/system/$program_name.service"    
+
+    clear
+
+    echo "Moving file to $final_path"
+    $sudo_program mv "$temp_file" "$final_path" || errorout "Failed to move $temp_file to $final_path"
+    echo "Changing ownership"
+    $sudo_program chown root:root "$final_path" || errorout "Failed to change ownership of $final_path"
+    echo "Changing permissions"
+    $sudo_program chmod 644 "$final_path" || errorout "Failed to change permissions of $final_path"
+}
+
+### Main Program
+main () {
+    handle_args $@
+
+    ui_welcome
+
+    ui_program_info
+    ui_service_info
+    ui_env_info
+
+    ui_verify_program_info
+    ui_verify_service_info
+    ui_verify_env_info
+
+    generate_service_file
+
+    ui_final
+}
+
+main $@
